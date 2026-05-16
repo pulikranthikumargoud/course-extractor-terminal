@@ -3,9 +3,6 @@ from flask_cors import CORS
 import requests
 import os
 import logging
-import json
-from bs4 import BeautifulSoup
-import re
 
 app = Flask(__name__)
 CORS(app)
@@ -15,10 +12,8 @@ logger = logging.getLogger(__name__)
 
 # --- CONFIGURATION ENGINE RECOVERY ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "") # Automatically provided by Render
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 
-# Fallback memory buffer cache to store session steps per user
-# In production webhooks, a real DB is preferred, but this works for live active sessions
 USER_SESSIONS = {}
 
 class DynamicClassplusSigner:
@@ -57,29 +52,24 @@ class DynamicClassplusSigner:
             return raw_url
 
 def send_telegram_message(chat_id, text):
-    """Utility helper to send direct reply text back to user chat."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     try:
         requests.post(url, json=payload, timeout=8)
     except Exception as e:
-        logger.error(f"Failed to send telegram message response: {e}")
+        logger.error(f"Failed to send telegram message: {e}")
 
-def send_telegram_document(chat_id, file_path, caption):
-    """Utility helper to send processed text manifest documents back to user chat."""
+def send_telegram_document(chat_id, file_content, file_name, caption):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
     try:
-        with open(file_path, 'rb') as doc:
-            files = {'document': doc}
-            data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
-            requests.post(url, data=data, files=files, timeout=15)
+        files = {'document': (file_name, file_content, 'text/plain')}
+        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
+        requests.post(url, data=data, files=files, timeout=15)
     except Exception as e:
-        logger.error(f"Failed to send document stream response: {e}")
+        logger.error(f"Failed to send document: {e}")
 
-# --- WEBHOOK INTERCEPT ROUTE LAYER ---
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def telegram_webhook_catcher():
-    """Listens natively to Telegram webhook payloads without threads."""
     update = request.get_json()
     if not update or "message" not in update:
         return jsonify({"status": "ignored"}), 200
@@ -128,8 +118,12 @@ def telegram_webhook_catcher():
             )
             return jsonify({"status": "ok"}), 200
 
-    # 3. Handle File Upload Processing
-    elif "document" in message and user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("step") == "await_file":
+    # 3. Handle File Upload Processing Safely via Memory Streams
+    elif "document" in message:
+        if user_id not in USER_SESSIONS or USER_SESSIONS[user_id].get("step") != "await_file":
+            send_telegram_message(chat_id, "⚠️ No active validation session found. Type /start to clear cache and start over.")
+            return jsonify({"status": "ok"}), 200
+
         document = message["document"]
         file_name = document.get("file_name", "links.txt")
         file_id = document["file_id"]
@@ -138,41 +132,42 @@ def telegram_webhook_catcher():
             send_telegram_message(chat_id, "❌ Please send a valid text document container layout (`.txt`).")
             return jsonify({"status": "ok"}), 200
 
-        # Download raw file via Telegram API
-        send_telegram_message(chat_id, "📡 *Downloading raw manifest layout...*")
-        get_file_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
-        file_info = requests.get(get_file_url).json()
+        send_telegram_message(chat_id, "📡 *Processing file from Telegram cloud...*")
         
-        if file_info.get("ok"):
-            file_path = file_info["result"]["file_path"]
-            download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-            raw_content = requests.get(download_url).text
+        try:
+            get_file_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
+            file_info = requests.get(get_file_url, timeout=8).json()
             
-            # Process and Sign Links
-            user_token = USER_SESSIONS[user_id]["token"]
-            signer_engine = DynamicClassplusSigner(user_token)
-            
-            processed_lines = []
-            for line in raw_content.splitlines():
-                if "http" in line:
-                    prefix, actual_url = line.split("http", 1)
-                    actual_url = "http" + actual_url.strip()
-                    signed_link = signer_engine.fetch_signed_url(actual_url)
-                    processed_lines.append(f"{prefix.strip()} {signed_link}")
-                else:
-                    processed_lines.append(line)
-            
-            output_filename = f"signed_{file_name}"
-            with open(output_filename, "w", encoding="utf-8") as out_file:
-                out_file.write("\n".join(processed_lines))
+            if file_info.get("ok"):
+                file_path = file_info["result"]["file_path"]
+                download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
                 
-            send_telegram_document(chat_id, output_filename, "✅ **All video streams successfully signed!**\n\n*Session closed. To load a new extraction run, use /start.*")
-            
-            USER_SESSIONS.pop(user_id, None)
-            if os.path.exists(output_filename):
-                os.remove(output_filename)
-        else:
-            send_telegram_message(chat_id, "⚠️ Failed to fetch file from Telegram storage cloud.")
+                # Fetch directly into memory
+                raw_content = requests.get(download_url, timeout=10).text
+                user_token = USER_SESSIONS[user_id]["token"]
+                signer_engine = DynamicClassplusSigner(user_token)
+                
+                processed_lines = []
+                for line in raw_content.splitlines():
+                    if "http" in line:
+                        prefix, actual_url = line.split("http", 1)
+                        actual_url = "http" + actual_url.strip()
+                        signed_link = signer_engine.fetch_signed_url(actual_url)
+                        processed_lines.append(f"{prefix.strip()} {signed_link}")
+                    else:
+                        processed_lines.append(line)
+                
+                output_content = "\n".join(processed_lines)
+                output_filename = f"signed_{file_name}"
+                
+                # Upload back instantly without using local disk storage
+                send_telegram_document(chat_id, output_content, output_filename, "✅ **All video streams successfully signed!**\n\n*Session closed. To load a new extraction run, use /start.*")
+                USER_SESSIONS.pop(user_id, None)
+            else:
+                send_telegram_message(chat_id, "⚠️ Failed to fetch file path from Telegram servers.")
+        except Exception as e:
+            logger.error(f"Error in file processor layout: {e}")
+            send_telegram_message(chat_id, f"⚠️ **Runtime engine error:** `{str(e)}`")
             
         return jsonify({"status": "ok"}), 200
 
@@ -180,17 +175,11 @@ def telegram_webhook_catcher():
 
 @app.route('/')
 def home():
-    # Automatically registers the webhook URL dynamically with Telegram on every launch
     if BOT_TOKEN and RENDER_EXTERNAL_URL:
         webhook_setup_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
         resp = requests.get(webhook_setup_url).json()
-        logger.info(f"Dynamic Webhook registration status: {resp}")
         return f"🚀 **Webhook Engine Active:** {resp.get('description', 'Status Pending')}"
     return "🚀 **Classplus Webhook Signer Engine Online**"
-
-@app.route('/api/health', methods=['GET'])
-def health():
-    return jsonify({'status': 'healthy'})
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
