@@ -3,7 +3,6 @@ from flask_cors import CORS
 import requests
 import os
 import logging
-import json
 
 app = Flask(__name__)
 CORS(app)
@@ -11,11 +10,24 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# --- CONFIGURATION ENGINE RECOVERY ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 
-# Advanced multi-tier session state allocation matrix
 USER_SESSIONS = {}
+
+ADMIN_USERNAME = "@kranthikumar_goud"
+ADMIN_ID = "1001653060"
+BRAND_NAME = "@kranthikumargoudEEE"
+
+# Production-Grade Multi-Tenant Headers for ClassX Infrastructure
+CLASSX_CLIENT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "Origin": "https://www.ohminstitute.live",
+    "Referer": "https://www.ohminstitute.live/"
+}
 
 class UniversalContentSigner:
     def __init__(self, token):
@@ -47,8 +59,8 @@ def get_main_menu():
     return {
         "inline_keyboard": [
             [{"text": "🛡️ 1. Classplus Engine", "callback_data": "menu_cp"}],
-            [{"text": "⚡ 2. AppX Engine", "callback_data": "menu_appx"}],
-            [{"text": "📝 3. Text to Video Extract", "callback_data": "menu_extract"}]
+            [{"text": "⚡ 2. AppX / ClassX Engine", "callback_data": "menu_appx"}],
+            [{"text": "🔒 3. Text to Video Extract (Premium)", "callback_data": "menu_extract"}]
         ]
     }
 
@@ -70,6 +82,9 @@ def get_appx_submenu():
             [{"text": "⬅️ Back to Main Menu", "callback_data": "go_main"}]
         ]
     }
+
+def get_back_button():
+    return {"inline_keyboard": [[{"text": "⬅️ Back to Main Menu", "callback_data": "go_main"}]]}
 
 # --- TELEGRAM BOT WEBHOOK SENDING API LAYERS ---
 def send_msg(chat_id, text, reply_markup=None):
@@ -99,7 +114,6 @@ def telegram_webhook_catcher():
     if not update:
         return jsonify({"status": "ignored"}), 200
 
-    # PART A: TEXT MESSAGE INPUT PROCESSING
     if "message" in update:
         message = update["message"]
         chat_id = message["chat"]["id"]
@@ -109,29 +123,44 @@ def telegram_webhook_catcher():
             text = message["text"].strip()
             
             if text == "/start" or text == "/reset":
-                USER_SESSIONS[user_id] = {"step": "idle", "platform": None, "token": None}
-                send_msg(chat_id, "🚀 **Universal Extractor Command Matrix Live**\n\nSelect your operation path layer:", reply_markup=get_main_menu())
+                USER_SESSIONS[user_id] = {"step": "idle", "platform": None, "token": None, "api_base": ""}
+                send_msg(chat_id, f"🚀 **Welcome to {BRAND_NAME} Extractor Engine**\n\nSelect your operation path layer below to begin:", reply_markup=get_main_menu())
                 return jsonify({"status": "ok"}), 200
 
-            # Intercept Active State Input Drivers
             state = USER_SESSIONS.get(user_id, {}).get("step", "idle")
             
+            # --- REAL CLASSPLUS INTERACTION STEP ---
             if state == "cp_await_org_num":
                 if "*" not in text:
-                    send_msg(chat_id, "❌ Invalid format. Please provide it exactly as `ORGCODE*MOBILE` (e.g., `abcd*9876543210`):")
+                    send_msg(chat_id, "❌ Invalid format. Use `ORGCODE*MOBILE` (e.g., `gxsrt*9949xxxxxx`):")
                     return jsonify({"status": "ok"}), 200
                 org, phone = text.split("*", 1)
                 USER_SESSIONS[user_id].update({"step": "cp_await_otp", "org": org.strip().lower(), "phone": phone.strip()})
                 
-                # SIMULATED CLASSPLUS OTP GATEWAY TRIGGER
-                send_msg(chat_id, f"📡 *Reaching out to Classplus Central Servers...*\nVerification code successfully requested for **{phone.strip()}** under ORG **{org.strip().upper()}**.\n\n🔢 Enter the **4-Digit OTP** code you received:")
+                try:
+                    cp_url = f"https://api.classplusapp.com/v2/users/otp?mobileNumber={phone.strip()}&orgCode={org.strip().lower()}"
+                    requests.get(cp_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+                except Exception:
+                    pass
+
+                send_msg(chat_id, f"📡 *Request sent to Classplus infrastructure!* Verification code requested for **{phone.strip()}**.\n\nEnter your **4-Digit OTP**:")
                 return jsonify({"status": "ok"}), 200
 
             elif state == "cp_await_otp":
-                # Simulated verification loop -> yields access token string natively
-                mock_token = f"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ClassplusMockVerifiedTokenSessionMatrixKeyForUser_{user_id}"
-                USER_SESSIONS[user_id].update({"step": "await_file", "platform": "classplus", "token": mock_token})
-                send_msg(chat_id, f"✅ **OTP Verification Successful!**\n\n🔑 **Generated Access Token:**\n`{mock_token}`\n\nNow, upload your link dump text file (`.txt`) to start extraction.")
+                session = USER_SESSIONS[user_id]
+                try:
+                    verify_url = "https://api.classplusapp.com/v2/users/verify"
+                    payload = {"mobileNumber": session["phone"], "orgCode": session["org"], "otp": text.strip()}
+                    resp = requests.post(verify_url, json=payload, headers={"User-Agent": "Mozilla/5.0"}, timeout=8).json()
+                    
+                    if resp.get("status") == "success" or "data" in resp:
+                        token = resp["data"]["token"]
+                        USER_SESSIONS[user_id].update({"step": "await_file", "platform": "classplus", "token": token})
+                        send_msg(chat_id, f"✅ **Classplus Login Successful!**\n\nNow, upload your link dump text file (`.txt`):")
+                    else:
+                        send_msg(chat_id, f"❌ **Verification Failed:** `{resp.get('message', 'Invalid OTP verification code')}`")
+                except Exception as e:
+                    send_msg(chat_id, f"⚠️ Connection Error: `{str(e)}`")
                 return jsonify({"status": "ok"}), 200
 
             elif state == "cp_await_direct_token":
@@ -139,54 +168,92 @@ def telegram_webhook_catcher():
                 send_msg(chat_id, "✅ **Classplus token locked successfully!**\n\nNow, upload your raw link dump text file (`.txt`) container:")
                 return jsonify({"status": "ok"}), 200
 
+            # --- DYNAMIC APPX & CLASSX CLUSTER LAYER ---
             elif state == "appx_await_base_url":
-                # Simple parser to isolate core API routing configurations
-                clean_url = text.replace("https://", "").replace("http://", "").split('/')[0]
-                actual_api = f"https://api.{clean_url}/v1" if "api." not in clean_url else f"https://{clean_url}/v1"
-                USER_SESSIONS[user_id].update({"step": "appx_choose_login_method", "base_url": actual_api})
-                
-                send_msg(chat_id, f"🌐 **Target AppX Endpoint Verified:**\n`{actual_api}`\n\nNow, tap your preferred connection format below:", reply_markup=get_appx_submenu())
+                input_url = text.lower()
+                # Dynamically match dedicated API domains like classx.co.in or fallback to sub-domains
+                if "ohminstitute" in input_url:
+                    api_base = "https://eeecliveapi.classx.co.in/api/v1"
+                else:
+                    clean_domain = input_url.replace("https://", "").replace("http://", "").replace("www.", "").split('/')[0]
+                    api_base = f"https://api.{clean_domain}/api/v1"
+
+                USER_SESSIONS[user_id].update({"step": "appx_choose_login_method", "api_base": api_base})
+                send_msg(chat_id, f"🌐 **Validated Cluster API Endpoint:**\n`{api_base}`\n\nSelect your connection format:", reply_markup=get_appx_submenu())
                 return jsonify({"status": "ok"}), 200
 
             elif state == "appx_await_creds_pass":
                 if "*" not in text:
-                    send_msg(chat_id, "❌ Invalid format. Please use `MOBILE*PASSWORD` structure:")
+                    send_msg(chat_id, "❌ Invalid format. Please use `MOBILE*PASSWORD`:")
                     return jsonify({"status": "ok"}), 200
                 phone, password = text.split("*", 1)
-                mock_bearer = f"Bearer appx_auth_matrix_secure_token_string_session_{user_id}"
-                USER_SESSIONS[user_id].update({"step": "await_file", "platform": "appx", "token": mock_bearer})
-                send_msg(chat_id, f"✅ **AppX Handshake Success!** Secure profile loaded via credential string.\n\nNow, upload your link dump text file (`.txt`):")
+                session = USER_SESSIONS[user_id]
+                
+                try:
+                    login_url = f"{session['api_base']}/auth/v2/login"
+                    payload = {"phone": phone.strip(), "password": password.strip()}
+                    resp = requests.post(login_url, json=payload, headers=CLASSX_CLIENT_HEADERS, timeout=8).json()
+                    
+                    if resp.get("success") or "token" in resp:
+                        token = resp.get("token") or resp.get("data", {}).get("token")
+                        USER_SESSIONS[user_id].update({"step": "await_file", "platform": "appx", "token": token})
+                        send_msg(chat_id, f"✅ **Handshake Success! Profile Unlocked.**\n\nNow, upload your link dump text file (`.txt`):")
+                    else:
+                        send_msg(chat_id, f"❌ **Authentication Rejected:** `{resp.get('message', 'Invalid login credentials')}`")
+                except Exception as e:
+                    send_msg(chat_id, f"⚠️ Endpoint Connection Error: `{str(e)}`")
                 return jsonify({"status": "ok"}), 200
 
             elif state == "appx_await_num_otp":
-                USER_SESSIONS[user_id].update({"step": "appx_await_otp_verify", "phone": text})
-                send_msg(chat_id, f"📡 OTP request broadcasted to **{text}** via AppX API router gateway.\n\nEnter the **6-Digit OTP** login validation key:")
+                session = USER_SESSIONS[user_id]
+                phone_num = text.strip()
+                USER_SESSIONS[user_id].update({"step": "appx_await_otp_verify", "phone": phone_num})
+                
+                try:
+                    otp_url = f"{session['api_base']}/auth/v2/send-otp"
+                    payload = {"phone": phone_num}
+                    requests.post(otp_url, json=payload, headers=CLASSX_CLIENT_HEADERS, timeout=8)
+                except Exception:
+                    pass
+                    
+                send_msg(chat_id, f"📡 OTP request broadcasted to **{phone_num}** via cluster gateway.\n\nEnter the **6-Digit OTP** login validation key:")
                 return jsonify({"status": "ok"}), 200
 
             elif state == "appx_await_otp_verify":
-                mock_bearer = f"Bearer appx_otp_matrix_secure_token_string_session_{user_id}"
-                USER_SESSIONS[user_id].update({"step": "await_file", "platform": "appx", "token": mock_bearer})
-                send_msg(chat_id, f"✅ **AppX Verification Code Accepted!** Auth Bearer context allocated.\n\nNow, upload your link dump text file (`.txt`):")
+                session = USER_SESSIONS[user_id]
+                try:
+                    verify_url = f"{session['api_base']}/auth/v2/verify-otp"
+                    payload = {"phone": session["phone"], "otp": text.strip()}
+                    resp = requests.post(verify_url, json=payload, headers=CLASSX_CLIENT_HEADERS, timeout=8).json()
+                    
+                    if resp.get("success") or "token" in resp:
+                        token = resp.get("token") or resp.get("data", {}).get("token")
+                        USER_SESSIONS[user_id].update({"step": "await_file", "platform": "appx", "token": token})
+                        send_msg(chat_id, f"✅ **Verification Code Accepted! Secure context allocated.**\n\nNow, upload your link dump text file (`.txt`):")
+                    else:
+                        send_msg(chat_id, f"❌ **Invalid OTP Code:** `{resp.get('message', 'The code entered is incorrect')}`. Use /start to reset.")
+                except Exception as e:
+                    send_msg(chat_id, f"⚠️ Cluster Network Exception: `{str(e)}`")
                 return jsonify({"status": "ok"}), 200
 
             elif state == "appx_await_direct_token":
                 USER_SESSIONS[user_id].update({"step": "await_file", "platform": "appx", "token": text})
-                send_msg(chat_id, "✅ **AppX Bearer Token saved to session runtime context!**\n\nNow, upload your raw link dump text file (`.txt`):")
+                send_msg(chat_id, "✅ **AppX / ClassX Bearer Token saved!**\n\nNow, upload your raw link dump text file (`.txt`):")
                 return jsonify({"status": "ok"}), 200
 
-        # PART B: MANIFEST DOCUMENT CONCURRENCY SCANNER
+        # --- TEXT FILE LINK PROCESSING LOOP ---
         elif "document" in message:
             if USER_SESSIONS.get(user_id, {}).get("step") != "await_file":
-                send_msg(chat_id, "⚠️ No active authentication file token locked for this user profile session. Type /start to load settings.")
+                send_msg(chat_id, "⚠️ No active token configuration locked for this profile. Type /start to load settings.")
                 return jsonify({"status": "ok"}), 200
 
             document = message["document"]
             file_name = document.get("file_name", "links.txt")
             if not file_name.endswith('.txt'):
-                send_msg(chat_id, "❌ Container alignment error. Please upload a structured `.txt` extension layout file.")
+                send_msg(chat_id, "❌ File type mismatch. Please upload a structured `.txt` document file.")
                 return jsonify({"status": "ok"}), 200
 
-            send_msg(chat_id, "📡 *Downloading manifest file stream directly into memory matrix...*")
+            send_msg(chat_id, "📡 *Downloading file container stream directly into memory...*")
             try:
                 file_info = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={document['file_id']}", timeout=8).json()
                 raw_content = requests.get(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info['result']['file_path']}", timeout=10).text
@@ -212,13 +279,12 @@ def telegram_webhook_catcher():
                         processed_lines.append(line)
 
                 output_text = "\n".join(processed_lines)
-                send_doc(chat_id, output_text, f"signed_{file_name}", f"✅ **Extraction Completed Successfully!**\n\n⚙️ Platform Strategy: `{session_data['platform'].upper()}`\n🔗 Links Remapped: `{count}`\n\n*Session context flushed. Use /start to load a new run.*")
+                send_doc(chat_id, output_text, f"signed_{file_name}", f"✅ **Extraction Completed Successfully!**\n\n⚙️ Platform: `{session_data['platform'].upper()}`\n🔗 Links Remapped: `{count}`\n\n*Session closed. Use /start to run a new batch.*")
                 USER_SESSIONS.pop(user_id, None)
             except Exception as e:
                 send_msg(chat_id, f"⚠️ **Processing engine exception:** `{str(e)}`")
             return jsonify({"status": "ok"}), 200
 
-    # PART C: INLINE MENU KEYBOARD BUTTON CLICK CALLBACKS
     elif "callback_query" in update:
         query = update["callback_query"]
         chat_id = query["message"]["chat"]["id"]
@@ -227,43 +293,42 @@ def telegram_webhook_catcher():
         data = query["data"]
 
         if user_id not in USER_SESSIONS:
-            USER_SESSIONS[user_id] = {"step": "idle", "platform": None, "token": None}
+            USER_SESSIONS[user_id] = {"step": "idle", "platform": None, "token": None, "api_base": ""}
 
         if data == "go_main":
-            edit_msg(chat_id, message_id, "🚀 **Universal Extractor Command Matrix Live**\n\nSelect your operation path layer:", reply_markup=get_main_menu())
-            
+            edit_msg(chat_id, message_id, f"🚀 **Welcome to {BRAND_NAME} Extractor Engine**\n\nSelect your operation path layer below to begin:", reply_markup=get_main_menu())
         elif data == "menu_cp":
             edit_msg(chat_id, message_id, "🛡️ **Classplus Engine Configuration Setup**\n\nChoose an option to authenticate your extraction container run:", reply_markup=get_classplus_submenu())
-            
         elif data == "cp_otp_init":
-            USER_SESSIONS[user_id]["step"] = "cp_auth_selection"
             USER_SESSIONS[user_id]["step"] = "cp_await_org_num"
             send_msg(chat_id, "📱 **Classplus Automated OTP Login Mode**\n\nPlease submit your details exactly in this format:\n`ORGCODE*MOBILE_NUMBER`\n\n*(Example: `gxsrt*9949xxxxxx`)*")
-            
         elif data == "cp_direct_token":
             USER_SESSIONS[user_id]["step"] = "cp_await_direct_token"
             send_msg(chat_id, "🔑 **Classplus Token Manual Ingestion**\n\nPlease paste your raw `x-access-token` string copied directly from your browser dev tools:")
-
         elif data == "menu_appx":
             USER_SESSIONS[user_id]["step"] = "appx_await_base_url"
-            send_msg(chat_id, "⚡ **AppX Core Link Strategy Initializer**\n\nPlease paste your AppX portal website or application base URL address first:\n\n*(Example: `https://delhiiasprep.com` or backend API dashboard domain link)*")
-
+            send_msg(chat_id, "⚡ **AppX / ClassX Link Strategy Initializer**\n\nPlease paste your portal website or application base URL address first:\n\n*(Example: `https://www.ohminstitute.live/` or `https://delhiiasprep.com`)*")
         elif data == "appx_pass_init":
-            USER_SESSIONS[user_id]["step"] = "appx_creds_pass"
             USER_SESSIONS[user_id]["step"] = "appx_await_creds_pass"
-            send_msg(chat_id, "🔐 **AppX Credential Validation Strategy**\n\nPlease pass parameters exactly as:\n`MOBILE_NUMBER*PASSWORD`\n\n*(Example: `9876543210*MySecurePass123`)*")
-
+            send_msg(chat_id, "🔐 **AppX / ClassX Credential Validation Strategy**\n\nPlease pass parameters exactly as:\n`MOBILE_NUMBER*PASSWORD`\n\n*(Example: `9876543210*MySecurePass123`)*")
         elif data == "appx_otp_init":
             USER_SESSIONS[user_id]["step"] = "appx_await_num_otp"
-            send_msg(chat_id, "📱 **AppX API OTP Verification Mode**\n\nPlease type your registered **10-Digit Mobile Number** to request a dynamic sign-in token:")
-
+            send_msg(chat_id, "📱 **AppX / ClassX API OTP Verification Mode**\n\nPlease type your registered **10-Digit Mobile Number** to request a dynamic sign-in token:")
         elif data == "appx_direct_token":
             USER_SESSIONS[user_id]["step"] = "appx_await_direct_token"
-            send_msg(chat_id, "🔑 **AppX Bearer Token Manual Ingestion**\n\nPlease paste your complete authorization token text string value directly here:")
-
+            send_msg(chat_id, "🔑 **AppX / ClassX Bearer Token Manual Ingestion**\n\nPlease paste your complete authorization token text string value directly here:")
         elif data == "menu_extract":
-            USER_SESSIONS[user_id].update({"step": "await_file", "platform": "classplus", "token": "fallback_bypass_mode"})
-            send_msg(chat_id, "📝 **Option 3: Pure Text Link Signer Isolation Selected!**\n\nYou can skip manual logging credentials step right now. Simply upload your raw text file (`.txt`) dump immediately:")
+            paywall_text = (
+                f"⚠️ **Access Denied — Subscription Required** ⚠️\n\n"
+                f"The **Text to Video Extract** workflow feature is exclusively locked for premium VIP plan members under the {BRAND_NAME} brand framework.\n\n"
+                f"To verify your profile workspace node and purchase a premium license token, please message the owner immediately with your connection data details below:\n\n"
+                f"👤 **Owner Username:** {ADMIN_USERNAME}\n"
+                f"🆔 **Admin Profile ID:** `{ADMIN_ID}`\n"
+                f"👑 **Owner Legal Name:** Kranthikumar Goud\n"
+                f"🌐 **Language Context:** English (`en`)\n\n"
+                f"👉 Tap the button below to return to the baseline configuration options menu."
+            )
+            edit_msg(chat_id, message_id, paywall_text, reply_markup=get_back_button())
 
         return jsonify({"status": "ok"}), 200
 
