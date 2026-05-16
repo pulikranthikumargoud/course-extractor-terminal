@@ -168,7 +168,6 @@ def run_pyrogram_bot():
         logger.info("Initializing background Pyrogram runner context...")
         bot.start()
         logger.info("Pyrogram listener running stably in isolated background thread!")
-        # Keeps the thread alive securely
         loop.run_forever()
 
 if bot:
