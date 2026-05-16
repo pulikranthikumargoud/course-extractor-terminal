@@ -3,28 +3,22 @@ from flask_cors import CORS
 import requests
 import os
 import logging
-import threading
-import asyncio
-import time
-from datetime import datetime
-
-# Asynchronous Telegram Components
-from pyrogram import Client, filters
+import json
+from bs4 import BeautifulSoup
+import re
 
 app = Flask(__name__)
 CORS(app)
 
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-
-# --- GLOBAL SYSTEM DIAGNOSTIC LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
-API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+# --- CONFIGURATION ENGINE RECOVERY ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "") # Automatically provided by Render
 
-# Active memory buffer cache to store session tokens per user ID
+# Fallback memory buffer cache to store session steps per user
+# In production webhooks, a real DB is preferred, but this works for live active sessions
 USER_SESSIONS = {}
 
 class DynamicClassplusSigner:
@@ -62,133 +56,141 @@ class DynamicClassplusSigner:
             logger.error(f"Handshake signature error: {e}")
             return raw_url
 
-# --- TELEGRAM ASYNCHRONOUS ENGINE DEFINITIONS ---
-bot = None
-if API_ID and API_HASH and BOT_TOKEN:
-    logger.info("Configuring master Pyrogram client configuration core...")
-    bot = Client("render_root_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1)
+def send_telegram_message(chat_id, text):
+    """Utility helper to send direct reply text back to user chat."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, json=payload, timeout=8)
+    except Exception as e:
+        logger.error(f"Failed to send telegram message response: {e}")
 
-    @bot.on_message(filters.command("reset") & filters.private)
-    async def reset_handler(client, message):
-        user_id = message.from_user.id
-        USER_SESSIONS.pop(user_id, None)
-        logger.info(f"Flushed session memory cache manually for user: {user_id}")
-        await message.reply_text("🔄 **Session memory completely cleared!** Type /start to begin fresh.")
+def send_telegram_document(chat_id, file_path, caption):
+    """Utility helper to send processed text manifest documents back to user chat."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    try:
+        with open(file_path, 'rb') as doc:
+            files = {'document': doc}
+            data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
+            requests.post(url, data=data, files=files, timeout=15)
+    except Exception as e:
+        logger.error(f"Failed to send document stream response: {e}")
 
-    @bot.on_message(filters.command("help") & filters.private)
-    async def help_handler(client, message):
-        logger.info(f"Received /help from user: {message.from_user.id}")
-        await message.reply_text(
-            "📖 **Available Extractor Commands:**\n\n"
-            "▶️ /start - Start a new link signing extraction session\n"
-            "🔄 /reset - Clear your active token memory session\n"
-            "ℹ️ /help - Display this command options menu"
-        )
+# --- WEBHOOK INTERCEPT ROUTE LAYER ---
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def telegram_webhook_catcher():
+    """Listens natively to Telegram webhook payloads without threads."""
+    update = request.get_json()
+    if not update or "message" not in update:
+        return jsonify({"status": "ignored"}), 200
 
-    @bot.on_message(filters.command("start") & filters.private)
-    async def start_handler(client, message):
-        user_id = message.from_user.id
-        logger.info(f"Received /start from user: {user_id}")
-        USER_SESSIONS[user_id] = {"step": "await_token"}
+    message = update["message"]
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    
+    # 1. Handle Commands
+    if "text" in message:
+        text = message["text"].strip()
         
-        await message.reply_text(
-            "🔑 **Classplus Dynamic Link Signer Engine**\n\n"
-            "Please send me your fresh **`x-access-token`** string from your browser first:"
-        )
+        if text == "/start":
+            USER_SESSIONS[user_id] = {"step": "await_token"}
+            send_telegram_message(chat_id, 
+                "🔑 **Classplus Dynamic Link Signer Engine**\n\n"
+                "Please send me your fresh **`x-access-token`** string from your browser first:"
+            )
+            return jsonify({"status": "ok"}), 200
+            
+        elif text == "/reset":
+            USER_SESSIONS.pop(user_id, None)
+            send_telegram_message(chat_id, "🔄 **Session memory completely cleared!** Type /start to begin fresh.")
+            return jsonify({"status": "ok"}), 200
+            
+        elif text == "/help":
+            send_telegram_message(chat_id,
+                "📖 **Available Extractor Commands:**\n\n"
+                "▶️ /start - Start a new link signing session\n"
+                "🔄 /reset - Clear active token session cache\n"
+                "ℹ️ /help - Display this command menu"
+            )
+            return jsonify({"status": "ok"}), 200
 
-    @bot.on_message(filters.private & filters.text & ~filters.command(["start", "reset", "help"]))
-    async def token_catcher(client, message):
-        user_id = message.from_user.id
-        text = message.text.strip()
-
+        # 2. Capture Text Tokens
         if user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("step") == "await_token":
             if len(text) < 50:
-                await message.reply_text("❌ That looks too short to be a valid token string. Please send your complete token:")
-                return
-            
+                send_telegram_message(chat_id, "❌ That looks too short to be a valid token string. Please send your complete token:")
+                return jsonify({"status": "ok"}), 200
+                
             USER_SESSIONS[user_id]["token"] = text
             USER_SESSIONS[user_id]["step"] = "await_file"
-            await message.reply_text(
+            send_telegram_message(chat_id,
                 "✅ **Token successfully validated and locked for this session!**\n\n"
                 "Now, upload your link dump text file (`.txt`) and I will process it instantly."
             )
+            return jsonify({"status": "ok"}), 200
 
-    @bot.on_message(filters.document & filters.private)
-    async def file_processor(client, message):
-        user_id = message.from_user.id
+    # 3. Handle File Upload Processing
+    elif "document" in message and user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("step") == "await_file":
+        document = message["document"]
+        file_name = document.get("file_name", "links.txt")
+        file_id = document["file_id"]
         
-        if user_id not in USER_SESSIONS or "token" not in USER_SESSIONS[user_id]:
-            await message.reply_text("⚠️ No active validation session found. Type /start to clear cache and start over.")
-            return
+        if not file_name.endswith('.txt'):
+            send_telegram_message(chat_id, "❌ Please send a valid text document container layout (`.txt`).")
+            return jsonify({"status": "ok"}), 200
 
-        if not message.document.file_name.endswith('.txt'):
-            await message.reply_text("❌ Please send a valid text document container layout (`.txt`).")
-            return
-
-        status_msg = await message.reply_text("📡 *Downloading raw manifest from Telegram cloud...*")
-        input_file = await message.download()
+        # Download raw file via Telegram API
+        send_telegram_message(chat_id, "📡 *Downloading raw manifest layout...*")
+        get_file_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
+        file_info = requests.get(get_file_url).json()
         
-        await status_msg.edit("⚙️ *Regenerating cryptographic signatures using your provided token keys...*")
-        
-        try:
+        if file_info.get("ok"):
+            file_path = file_info["result"]["file_path"]
+            download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+            raw_content = requests.get(download_url).text
+            
+            # Process and Sign Links
             user_token = USER_SESSIONS[user_id]["token"]
             signer_engine = DynamicClassplusSigner(user_token)
-
-            with open(input_file, "r", encoding="utf-8") as file:
-                lines = file.readlines()
-
-            processed_content = []
-            for line in lines:
+            
+            processed_lines = []
+            for line in raw_content.splitlines():
                 if "http" in line:
                     prefix, actual_url = line.split("http", 1)
                     actual_url = "http" + actual_url.strip()
                     signed_link = signer_engine.fetch_signed_url(actual_url)
-                    processed_content.append(f"{prefix.strip()} {signed_link}")
+                    processed_lines.append(f"{prefix.strip()} {signed_link}")
                 else:
-                    processed_content.append(line.rstrip('\n'))
-
-            output_filename = f"signed_{message.document.file_name}"
+                    processed_lines.append(line)
+            
+            output_filename = f"signed_{file_name}"
             with open(output_filename, "w", encoding="utf-8") as out_file:
-                out_file.write("\n".join(processed_content))
-
-            await status_msg.edit("🚀 *Uploading verified manifest output file...*")
-            await message.reply_document(document=output_filename, caption="✅ **All video streams successfully signed!**\n\n*Session closed. To load a new extraction run, use /start.*")
+                out_file.write("\n".join(processed_lines))
+                
+            send_telegram_document(chat_id, output_filename, "✅ **All video streams successfully signed!**\n\n*Session closed. To load a new extraction run, use /start.*")
             
             USER_SESSIONS.pop(user_id, None)
-            os.remove(input_file)
-            os.remove(output_filename)
-            await status_msg.delete()
-        except Exception as e:
-            logger.error(f"Error in file processing loop: {e}")
-            await status_msg.edit(f"⚠️ **Runtime framework dropped task exception:** `{str(e)}`")
+            if os.path.exists(output_filename):
+                os.remove(output_filename)
+        else:
+            send_telegram_message(chat_id, "⚠️ Failed to fetch file from Telegram storage cloud.")
+            
+        return jsonify({"status": "ok"}), 200
 
-# --- NATIVE PORTAL WEB ROUTING ---
+    return jsonify({"status": "ignored"}), 200
+
 @app.route('/')
 def home():
-    return "🚀 **Asynchronous Classplus Web Signer Core Portal Live**"
+    # Automatically registers the webhook URL dynamically with Telegram on every launch
+    if BOT_TOKEN and RENDER_EXTERNAL_URL:
+        webhook_setup_url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
+        resp = requests.get(webhook_setup_url).json()
+        logger.info(f"Dynamic Webhook registration status: {resp}")
+        return f"🚀 **Webhook Engine Active:** {resp.get('description', 'Status Pending')}"
+    return "🚀 **Classplus Webhook Signer Engine Online**"
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
-
-def run_pyrogram_bot():
-    """Gives Gunicorn 5 seconds to fully boot and claim the network port before loading Pyrogram."""
-    if bot:
-        logger.info("Delaying Pyrogram runner startup to let Gunicorn bind successfully...")
-        time.sleep(5)
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        logger.info("Initializing background Pyrogram runner context...")
-        try:
-            bot.start()
-            logger.info("Pyrogram listener running stably inside background context loop!")
-            loop.run_forever()
-        except Exception as e:
-            logger.error(f"Background Pyrogram thread encountered an exception: {e}")
-
-if bot:
-    threading.Thread(target=run_pyrogram_bot, daemon=True).start()
+    return jsonify({'status': 'healthy'})
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
