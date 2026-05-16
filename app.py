@@ -5,6 +5,7 @@ import os
 import logging
 import threading
 import asyncio
+import time
 from datetime import datetime
 
 # Asynchronous Telegram Components
@@ -64,7 +65,7 @@ class DynamicClassplusSigner:
 # --- TELEGRAM ASYNCHRONOUS ENGINE DEFINITIONS ---
 bot = None
 if API_ID and API_HASH and BOT_TOKEN:
-    logger.info("Configuring non-blocking master Pyrogram core layout...")
+    logger.info("Configuring master Pyrogram client configuration core...")
     bot = Client("render_root_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1)
 
     @bot.on_message(filters.command("reset") & filters.private)
@@ -72,7 +73,17 @@ if API_ID and API_HASH and BOT_TOKEN:
         user_id = message.from_user.id
         USER_SESSIONS.pop(user_id, None)
         logger.info(f"Flushed session memory cache manually for user: {user_id}")
-        await message.reply_text("🔄 **Session memory completely cleared!** Type /start to drop a fresh running request chain.")
+        await message.reply_text("🔄 **Session memory completely cleared!** Type /start to begin fresh.")
+
+    @bot.on_message(filters.command("help") & filters.private)
+    async def help_handler(client, message):
+        logger.info(f"Received /help from user: {message.from_user.id}")
+        await message.reply_text(
+            "📖 **Available Extractor Commands:**\n\n"
+            "▶️ /start - Start a new link signing extraction session\n"
+            "🔄 /reset - Clear your active token memory session\n"
+            "ℹ️ /help - Display this command options menu"
+        )
 
     @bot.on_message(filters.command("start") & filters.private)
     async def start_handler(client, message):
@@ -85,7 +96,7 @@ if API_ID and API_HASH and BOT_TOKEN:
             "Please send me your fresh **`x-access-token`** string from your browser first:"
         )
 
-    @bot.on_message(filters.private & filters.text & ~filters.command(["start", "reset"]))
+    @bot.on_message(filters.private & filters.text & ~filters.command(["start", "reset", "help"]))
     async def token_catcher(client, message):
         user_id = message.from_user.id
         text = message.text.strip()
@@ -161,14 +172,20 @@ def health():
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
 def run_pyrogram_bot():
-    """Runs a dedicated background loop for Pyrogram without relying on Flask event hooks."""
+    """Gives Gunicorn 5 seconds to fully boot and claim the network port before loading Pyrogram."""
     if bot:
+        logger.info("Delaying Pyrogram runner startup to let Gunicorn bind successfully...")
+        time.sleep(5)
+        
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         logger.info("Initializing background Pyrogram runner context...")
-        bot.start()
-        logger.info("Pyrogram listener running stably in isolated background thread!")
-        loop.run_forever()
+        try:
+            bot.start()
+            logger.info("Pyrogram listener running stably inside background context loop!")
+            loop.run_forever()
+        except Exception as e:
+            logger.error(f"Background Pyrogram thread encountered an exception: {e}")
 
 if bot:
     threading.Thread(target=run_pyrogram_bot, daemon=True).start()
