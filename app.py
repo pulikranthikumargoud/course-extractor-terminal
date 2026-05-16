@@ -18,15 +18,20 @@ app = Flask(__name__)
 CORS(app)
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-logging.basicConfig(level=logging.INFO)
+
+# --- RIGOROUS CONFIGURATION LOGGING ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- SECURE API RECOVERY ---
 API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-# Temporary live cache to hold session tokens per user
+logger.info("Checking Environment Variables...")
+logger.info(f"-> TELEGRAM_API_ID detected: {'YES' if API_ID > 0 else 'NO'}")
+logger.info(f"-> TELEGRAM_API_HASH detected: {'YES' if len(API_HASH) > 0 else 'NO'}")
+logger.info(f"-> TELEGRAM_BOT_TOKEN detected: {'YES' if len(BOT_TOKEN) > 0 else 'NO'}")
+
 USER_SESSIONS = {}
 
 class DynamicClassplusSigner:
@@ -67,11 +72,13 @@ class DynamicClassplusSigner:
 # --- TELEGRAM BOT HANDLING LAYER ---
 bot = None
 if API_ID and API_HASH and BOT_TOKEN:
+    logger.info("Initializing Pyrogram Bot Instance...")
     bot = Client("render_root_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
     @bot.on_message(filters.command("start") & filters.private)
     async def start_handler(client, message):
         user_id = message.from_user.id
+        logger.info(f"Received /start from user: {user_id}")
         USER_SESSIONS[user_id] = {"step": "await_token"}
         
         await message.reply_text(
@@ -85,8 +92,9 @@ if API_ID and API_HASH and BOT_TOKEN:
         text = message.text.strip()
 
         if user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("step") == "await_token":
+            logger.info(f"User {user_id} submitted a token.")
             if len(text) < 50:
-                await message.reply_text("❌ That look too short to be a valid token string. Please send your complete token:")
+                await message.reply_text("❌ That looks too short to be a valid token string. Please send your complete token:")
                 return
             
             USER_SESSIONS[user_id]["token"] = text
@@ -110,6 +118,7 @@ if API_ID and API_HASH and BOT_TOKEN:
 
         status_msg = await message.reply_text("📡 *Downloading raw manifest from Telegram cloud...*")
         input_file = await message.download()
+        logger.info(f"Processing file from user {user_id}: {message.document.file_name}")
         
         await status_msg.edit("⚙️ *Regenerating cryptographic signatures using your provided token keys...*")
         
@@ -137,13 +146,16 @@ if API_ID and API_HASH and BOT_TOKEN:
             await status_msg.edit("🚀 *Uploading verified manifest output file...*")
             await message.reply_document(document=output_filename, caption="✅ **All video streams successfully signed!**\n\n*Session closed. To load a new extraction run, use /start.*")
             
-            # Flush session layout memory clear safety
             USER_SESSIONS.pop(user_id, None)
             os.remove(input_file)
             os.remove(output_filename)
             await status_msg.delete()
+            logger.info(f"File processing complete for user {user_id}")
         except Exception as e:
+            logger.error(f"Error in file processing loop: {e}")
             await status_msg.edit(f"⚠️ **Runtime framework dropped task exception:** `{str(e)}`")
+else:
+    logger.warning("Bot initialization skipped! Check your Environment Variables on Render.")
 
 @app.route('/')
 def home():
@@ -157,9 +169,14 @@ def initialize_bot_loop():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     if bot:
-        bot.run()
+        logger.info("Starting background Pyrogram event loop...")
+        try:
+            bot.run()
+        except Exception as e:
+            logger.error(f"Pyrogram execution crashed: {e}")
 
 if bot:
+    logger.info("Spawning background thread for Pyrogram bot...")
     worker_thread = threading.Thread(target=initialize_bot_loop, daemon=True)
     worker_thread.start()
 
