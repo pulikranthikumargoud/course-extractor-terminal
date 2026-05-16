@@ -1,17 +1,14 @@
-from flask import Flask, request, jsonify, send_file, render_template, send_from_directory, make_response
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
-from bs4 import BeautifulSoup
-import re
-import json
 import os
 import logging
+import threading
 import asyncio
 from datetime import datetime
 
 # Asynchronous Telegram Components
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 app = Flask(__name__)
 CORS(app)
@@ -68,7 +65,6 @@ class DynamicClassplusSigner:
 bot = None
 if API_ID and API_HASH and BOT_TOKEN:
     logger.info("Configuring non-blocking master Pyrogram core layout...")
-    # Setting workers=1 prevents Pyrogram from spawning multiple conflicting sub-threads
     bot = Client("render_root_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1)
 
     @bot.on_message(filters.command("reset") & filters.private)
@@ -164,19 +160,19 @@ def home():
 def health():
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
-# --- ASYNC EXHAUSTIVE WORKER LOOP HOOKS ---
-@app.before_first_request
-def start_telegram_listener():
-    """Triggers the moment Render makes its first ping request to the web service."""
+def run_pyrogram_bot():
+    """Runs a dedicated background loop for Pyrogram without relying on Flask event hooks."""
     if bot:
-        def run_async_loop():
-            asyncio.set_event_loop(asyncio.new_event_loop())
-            logger.info("Initializing non-blocking background Pyrogram bot routine...")
-            # start() boots the bot cleanly without demanding signals or main-thread ownership
-            bot.start()
-            logger.info("Pyrogram bot listener running stably inside background instance context.")
-            
-        threading.Thread(target=run_async_loop, daemon=True).start()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        logger.info("Initializing background Pyrogram runner context...")
+        bot.start()
+        logger.info("Pyrogram listener running stably in isolated background thread!")
+        # Keeps the thread alive securely
+        loop.run_forever()
+
+if bot:
+    threading.Thread(target=run_pyrogram_bot, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
