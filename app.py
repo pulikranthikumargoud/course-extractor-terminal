@@ -6,7 +6,6 @@ import re
 import json
 import os
 import logging
-import threading
 import asyncio
 from datetime import datetime
 
@@ -19,7 +18,7 @@ CORS(app)
 
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
-# --- RIGOROUS CONFIGURATION LOGGING ---
+# --- GLOBAL SYSTEM DIAGNOSTIC LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -27,12 +26,7 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-logger.info("Checking Environment Variables...")
-logger.info(f"-> TELEGRAM_API_ID detected: {'YES' if API_ID > 0 else 'NO'}")
-logger.info(f"-> TELEGRAM_API_HASH detected: {'YES' if len(API_HASH) > 0 else 'NO'}")
-logger.info(f"-> TELEGRAM_BOT_TOKEN detected: {'YES' if len(BOT_TOKEN) > 0 else 'NO'}")
-
-# Global storage for tracking active token input per user
+# Active memory buffer cache to store session tokens per user ID
 USER_SESSIONS = {}
 
 class DynamicClassplusSigner:
@@ -70,11 +64,12 @@ class DynamicClassplusSigner:
             logger.error(f"Handshake signature error: {e}")
             return raw_url
 
-# --- TELEGRAM BOT HANDLING LAYER ---
+# --- TELEGRAM ASYNCHRONOUS ENGINE DEFINITIONS ---
 bot = None
 if API_ID and API_HASH and BOT_TOKEN:
-    logger.info("Initializing Pyrogram Bot Instance...")
-    bot = Client("render_root_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+    logger.info("Configuring non-blocking master Pyrogram core layout...")
+    # Setting workers=1 prevents Pyrogram from spawning multiple conflicting sub-threads
+    bot = Client("render_root_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, workers=1)
 
     @bot.on_message(filters.command("reset") & filters.private)
     async def reset_handler(client, message):
@@ -100,7 +95,6 @@ if API_ID and API_HASH and BOT_TOKEN:
         text = message.text.strip()
 
         if user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("step") == "await_token":
-            logger.info(f"User {user_id} submitted a token.")
             if len(text) < 50:
                 await message.reply_text("❌ That looks too short to be a valid token string. Please send your complete token:")
                 return
@@ -126,7 +120,6 @@ if API_ID and API_HASH and BOT_TOKEN:
 
         status_msg = await message.reply_text("📡 *Downloading raw manifest from Telegram cloud...*")
         input_file = await message.download()
-        logger.info(f"Processing file from user {user_id}: {message.document.file_name}")
         
         await status_msg.edit("⚙️ *Regenerating cryptographic signatures using your provided token keys...*")
         
@@ -158,13 +151,11 @@ if API_ID and API_HASH and BOT_TOKEN:
             os.remove(input_file)
             os.remove(output_filename)
             await status_msg.delete()
-            logger.info(f"File processing complete for user {user_id}")
         except Exception as e:
             logger.error(f"Error in file processing loop: {e}")
             await status_msg.edit(f"⚠️ **Runtime framework dropped task exception:** `{str(e)}`")
-else:
-    logger.warning("Bot initialization skipped! Check your Environment Variables on Render.")
 
+# --- NATIVE PORTAL WEB ROUTING ---
 @app.route('/')
 def home():
     return "🚀 **Asynchronous Classplus Web Signer Core Portal Live**"
@@ -173,20 +164,19 @@ def home():
 def health():
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
-def initialize_bot_loop():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+# --- ASYNC EXHAUSTIVE WORKER LOOP HOOKS ---
+@app.before_first_request
+def start_telegram_listener():
+    """Triggers the moment Render makes its first ping request to the web service."""
     if bot:
-        logger.info("Starting background Pyrogram event loop...")
-        try:
-            bot.run()
-        except Exception as e:
-            logger.error(f"Pyrogram execution crashed: {e}")
-
-if bot:
-    logger.info("Spawning background thread for Pyrogram bot...")
-    worker_thread = threading.Thread(target=initialize_bot_loop, daemon=True)
-    worker_thread.start()
+        def run_async_loop():
+            asyncio.set_event_loop(asyncio.new_event_loop())
+            logger.info("Initializing non-blocking background Pyrogram bot routine...")
+            # start() boots the bot cleanly without demanding signals or main-thread ownership
+            bot.start()
+            logger.info("Pyrogram bot listener running stably inside background instance context.")
+            
+        threading.Thread(target=run_async_loop, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0', port=5000)
