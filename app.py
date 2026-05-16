@@ -32,6 +32,7 @@ logger.info(f"-> TELEGRAM_API_ID detected: {'YES' if API_ID > 0 else 'NO'}")
 logger.info(f"-> TELEGRAM_API_HASH detected: {'YES' if len(API_HASH) > 0 else 'NO'}")
 logger.info(f"-> TELEGRAM_BOT_TOKEN detected: {'YES' if len(BOT_TOKEN) > 0 else 'NO'}")
 
+# Global storage for tracking active token input per user
 USER_SESSIONS = {}
 
 class DynamicClassplusSigner:
@@ -75,6 +76,13 @@ if API_ID and API_HASH and BOT_TOKEN:
     logger.info("Initializing Pyrogram Bot Instance...")
     bot = Client("render_root_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+    @bot.on_message(filters.command("reset") & filters.private)
+    async def reset_handler(client, message):
+        user_id = message.from_user.id
+        USER_SESSIONS.pop(user_id, None)
+        logger.info(f"Flushed session memory cache manually for user: {user_id}")
+        await message.reply_text("🔄 **Session memory completely cleared!** Type /start to drop a fresh running request chain.")
+
     @bot.on_message(filters.command("start") & filters.private)
     async def start_handler(client, message):
         user_id = message.from_user.id
@@ -86,7 +94,7 @@ if API_ID and API_HASH and BOT_TOKEN:
             "Please send me your fresh **`x-access-token`** string from your browser first:"
         )
 
-    @bot.on_message(filters.private & filters.text & ~filters.command(["start"]))
+    @bot.on_message(filters.private & filters.text & ~filters.command(["start", "reset"]))
     async def token_catcher(client, message):
         user_id = message.from_user.id
         text = message.text.strip()
